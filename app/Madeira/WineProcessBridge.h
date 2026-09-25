@@ -19,6 +19,13 @@ int wine_process_is_running(void);
 // detached the JIT debugger and switched VPNs. Returns 0 on success.
 int madeira_write_continue_flag(void);
 
+// Mount a host folder as an additional Wine drive letter by (re)creating
+// dosdevices/<drive_letter>: -> host_path in the prefix. drive_letter is a
+// single ASCII letter (case-insensitive); "c" is reserved for drive_c and
+// should not be passed here. Safe to call multiple times (overwrites any
+// existing link at that letter). Returns 0 on success, -1 on error.
+int madeira_mount_drive(const char *prefix_path, const char *drive_letter, const char *host_path);
+
 #ifdef __cplusplus
 }
 #endif

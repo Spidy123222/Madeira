@@ -3,6 +3,7 @@ import UIKit
 import QuartzCore
 import Metal
 import os.log
+import UniformTypeIdentifiers
 
 // 2026-07-03 window-hosted Metal layer.
 //
@@ -837,6 +838,162 @@ final class InputSettings: ObservableObject {
     }
 }
 
+struct DriveMountEntry: Identifiable, Codable {
+    let id: UUID
+    var letter: String
+    var displayName: String
+    var bookmark: Data
+}
+
+/// Lets the user pick folders (via the Files picker) and mount them as extra
+/// Wine drive letters alongside C:, by symlinking into the prefix's
+/// dosdevices — see madeira_mount_drive() in WineProcessBridge.m.
+final class DriveMounts: ObservableObject {
+    static let shared = DriveMounts()
+
+    @Published var entries: [DriveMountEntry] = [] { didSet { save() } }
+
+    private var loading = false
+    /// Folders whose security scope we've started accessing this launch, kept
+    /// open for the app's lifetime since Wine (running in-process) may read
+    /// from them at any point while a game is running.
+    private var accessedURLs: [UUID: URL] = [:]
+
+    private static var url: URL {
+        FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("madeira-drive-mounts.json")
+    }
+
+    private init() {
+        loading = true
+        if let d = try? Data(contentsOf: Self.url),
+           let decoded = try? JSONDecoder().decode([DriveMountEntry].self, from: d) {
+            entries = decoded
+        }
+        loading = false
+    }
+
+    private func save() {
+        guard !loading else { return }
+        guard let d = try? JSONEncoder().encode(entries) else { return }
+        try? d.write(to: Self.url, options: .atomic)
+    }
+
+    private var usedLetters: Set<String> { Set(entries.map { $0.letter }).union(["c"]) }
+
+    private func nextAvailableLetter() -> String {
+        for code in UInt8(ascii: "d")...UInt8(ascii: "z") {
+            let letter = String(UnicodeScalar(code))
+            if !usedLetters.contains(letter) { return letter }
+        }
+        return "d"
+    }
+
+    func addMount(url: URL) {
+        guard url.startAccessingSecurityScopedResource() else {
+            LogStore.shared.log("Could not access selected folder", level: .error)
+            return
+        }
+        defer { url.stopAccessingSecurityScopedResource() }
+        guard let bookmark = try? url.bookmarkData(options: [], includingResourceValuesForKeys: nil, relativeTo: nil) else {
+            LogStore.shared.log("Could not bookmark selected folder", level: .error)
+            return
+        }
+        entries.append(DriveMountEntry(id: UUID(), letter: nextAvailableLetter(), displayName: url.lastPathComponent, bookmark: bookmark))
+    }
+
+    func removeMount(_ entry: DriveMountEntry) {
+        if let accessed = accessedURLs.removeValue(forKey: entry.id) {
+            accessed.stopAccessingSecurityScopedResource()
+        }
+        entries.removeAll { $0.id == entry.id }
+    }
+
+    /// Resolves each mount's bookmark and symlinks it into the prefix's
+    /// dosdevices under its assigned letter. Call before starting the Wine
+    /// process so the drives exist before the guest can look for them.
+    func applyMounts(prefixPath: String) {
+        for entry in entries {
+            var stale = false
+            guard let resolved = try? URL(resolvingBookmarkData: entry.bookmark, options: [], relativeTo: nil, bookmarkDataIsStale: &stale) else {
+                LogStore.shared.log("Drive \(entry.letter.uppercased()): could not resolve \(entry.displayName)", level: .error)
+                continue
+            }
+            guard resolved.startAccessingSecurityScopedResource() else {
+                LogStore.shared.log("Drive \(entry.letter.uppercased()): access denied for \(entry.displayName)", level: .error)
+                continue
+            }
+            accessedURLs[entry.id] = resolved
+
+            let rc = prefixPath.withCString { prefixC in
+                entry.letter.withCString { letterC in
+                    resolved.path.withCString { pathC in
+                        madeira_mount_drive(prefixC, letterC, pathC)
+                    }
+                }
+            }
+            if rc == 0 {
+                LogStore.shared.log("Mounted \(entry.displayName) as \(entry.letter.uppercased()):", level: .success)
+            } else {
+                LogStore.shared.log("Failed to mount \(entry.displayName) as \(entry.letter.uppercased()):", level: .error)
+            }
+        }
+    }
+}
+
+struct DriveMountsView: View {
+    @Environment(\.dismiss) private var dismiss
+    @ObservedObject private var mounts = DriveMounts.shared
+    @State private var showingPicker = false
+
+    var body: some View {
+        NavigationStack {
+            List {
+                if mounts.entries.isEmpty {
+                    Text("No folders mounted. A mounted folder appears inside Wine as an extra drive letter (D:, E:, …) alongside C:.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+                ForEach(mounts.entries) { entry in
+                    HStack {
+                        Text("\(entry.letter.uppercased()):")
+                            .font(.system(.body, design: .monospaced))
+                            .fontWeight(.bold)
+                            .frame(width: 28, alignment: .leading)
+                        Text(entry.displayName)
+                        Spacer()
+                    }
+                }
+                .onDelete { indexSet in
+                    for index in indexSet { mounts.removeMount(mounts.entries[index]) }
+                }
+            }
+            .navigationTitle("Mounted Folders")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button("Done") { dismiss() }
+                }
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button {
+                        showingPicker = true
+                    } label: {
+                        Image(systemName: "plus")
+                    }
+                }
+            }
+            .fileImporter(isPresented: $showingPicker, allowedContentTypes: [.folder]) { result in
+                switch result {
+                case .success(let url):
+                    mounts.addMount(url: url)
+                case .failure(let error):
+                    LogStore.shared.log("Folder picker failed: \(error.localizedDescription)", level: .error)
+                }
+            }
+        }
+    }
+}
+
 struct MadeiraMetalView: UIViewRepresentable {
     func makeUIView(context: Context) -> MetalBackedView {
         return MetalBackedView(frame: CGRect(x: 0, y: 0, width: 800, height: 600))
@@ -851,6 +1008,7 @@ struct ContentView: View {
     @State private var debuggerAttached = isDebuggerAttached()
     @ObservedObject private var input = InputSettings.shared
     @State private var pointerPanel = false
+    @State private var showDriveMounts = false
     @Namespace private var pointerNS
     /// .compact = iPhone landscape: game surface expands, arrow keys appear.
     @Environment(\.verticalSizeClass) private var vSizeClass
@@ -1578,6 +1736,12 @@ struct ContentView: View {
                 .buttonStyle(.borderedProminent)
                 .tint(.blue)
 
+                Button("Mount Folder") {
+                    showDriveMounts = true
+                }
+                .buttonStyle(.bordered)
+                .tint(.indigo)
+
                 Button("Clear Log") {
                     logStore.clear()
                 }
@@ -1585,6 +1749,9 @@ struct ContentView: View {
                 .tint(.red)
             }
             .padding()
+        }
+        .sheet(isPresented: $showDriveMounts) {
+            DriveMountsView()
         }
     }
 
@@ -2458,6 +2625,10 @@ struct ContentView: View {
 
         let documentsPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
         let winePrefixPath = documentsPath.appendingPathComponent("wine").path
+
+        // dosdevices/c: already exists by now (wineserver_start seeds the
+        // prefix); add any user-configured drive mounts alongside it.
+        DriveMounts.shared.applyMounts(prefixPath: winePrefixPath)
 
         // Call synchronously — caller already waited for wineserver to be ready
         let result = wine_process_start(winePrefixPath)

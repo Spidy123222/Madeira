@@ -21,6 +21,7 @@
 #include <sys/stat.h>
 #include <limits.h>
 #include <string.h>
+#include <ctype.h>
 
 #include "WineProcessBridge.h"
 #include "WineServerBridge.h"
@@ -1064,6 +1065,33 @@ int wine_process_start(const char *prefix_path) {
 
 int wine_process_is_running(void) {
     return g_wine_running;
+}
+
+int madeira_mount_drive(const char *prefix_path, const char *drive_letter, const char *host_path) {
+    if (!prefix_path || !drive_letter || !drive_letter[0] || !host_path || !host_path[0]) return -1;
+
+    char letter = (char)tolower((unsigned char)drive_letter[0]);
+    if (letter < 'a' || letter > 'z') return -1;
+
+    @autoreleasepool {
+        NSString *prefix = [NSString stringWithUTF8String:prefix_path];
+        NSString *dosdev = [prefix stringByAppendingPathComponent:@"dosdevices"];
+        NSFileManager *fm = [NSFileManager defaultManager];
+        [fm createDirectoryAtPath:dosdev withIntermediateDirectories:YES attributes:nil error:nil];
+
+        NSString *linkName = [NSString stringWithFormat:@"%c:", letter];
+        NSString *link = [dosdev stringByAppendingPathComponent:linkName];
+        NSString *target = [NSString stringWithUTF8String:host_path];
+
+        // Overwrite any existing link/stale mount at this letter.
+        [fm removeItemAtPath:link error:nil];
+        if (![fm createSymbolicLinkAtPath:link withDestinationPath:target error:nil]) {
+            LOG("mount_drive: failed to link %{public}s -> %{public}s", linkName.UTF8String, target.UTF8String);
+            return -1;
+        }
+        LOG("mount_drive: %{public}s -> %{public}s", linkName.UTF8String, target.UTF8String);
+        return 0;
+    }
 }
 
 int madeira_write_continue_flag(void) {

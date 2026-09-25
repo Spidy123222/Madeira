@@ -1,0 +1,65 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  # Fast signal: type-checks every Swift file in the app target against the
+  # iOS SDK. This does NOT link, so it needs none of the native static
+  # libraries produced by build/*/build.sh — it catches Swift-side breakage
+  # (like typos or API misuse) in seconds without the rest of the toolchain.
+  swift-typecheck:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Type-check app sources
+        run: |
+          SDK=$(xcrun --sdk iphoneos --show-sdk-path)
+          xcrun swiftc -typecheck \
+            -sdk "$SDK" -target arm64-apple-ios17.0 \
+            -import-objc-header app/Madeira/Madeira-Bridging-Header.h \
+            app/Madeira/*.swift
+
+      - name: Validate Xcode project
+        run: xcodebuild -project app/Madeira.xcodeproj -list
+
+  # Full build: compiles the native chain (wineserver, ntdll/win32u unix
+  # sides, DXMT, ...) and links the iOS app, unsigned.
+  #
+  # KNOWN LIMITATION: several build/*/build.sh scripts assume prerequisites
+  # this repo does not check out or script anywhere — notably a pre-configured
+  # wine/build-macos (Wine's own `./configure` output) and a built
+  # toolchains/llvm-project (for DXMT's airconv). Until those are scripted,
+  # this job is best-effort and non-blocking; it will start enforcing itself
+  # once the native build is fully reproducible from a clean checkout.
+  native-build:
+    runs-on: macos-15
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Build native libraries
+        run: |
+          set -x
+          for dir in gnutls-ios freetype-ios crypto-unix wineserver ntdll-unix win32u-unix dxmt-ios; do
+            script="build/$dir/build.sh"
+            [ -x "$script" ] || continue
+            echo "== $dir =="
+            "$script" || echo "!! $dir failed (see KNOWN LIMITATION above) !!"
+          done
+
+      - name: Build iOS app (unsigned)
+        run: |
+          # No shared .xcscheme is checked in, so target the app directly
+          # rather than by scheme (xcodebuild can't auto-create one headlessly).
+          xcodebuild build \
+            -project app/Madeira.xcodeproj \
+            -target Madeira \
+            -destination 'generic/platform=iOS' \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO

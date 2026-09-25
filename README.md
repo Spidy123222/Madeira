@@ -27,6 +27,15 @@ breaking changes.
 Because JIT requires debugger attach, this app cannot be distributed through the
 App Store. It is installed by sideloading.
 
+## Features
+
+- **Mounted folders.** The "Mount Folder" button opens the Files picker and
+  maps a chosen folder into the Wine prefix as an additional drive letter
+  (`D:`, `E:`, ...) alongside `C:`, so a game's assets or save data can live
+  outside the app's own container. Mounts persist across launches via
+  security-scoped bookmarks; remove one with a swipe in the "Mounted Folders"
+  sheet.
+
 ## Building
 
 The build is split across several chains — the unix-side Wine libraries, the
@@ -35,44 +44,3 @@ the native pieces; the app is built with `xcodebuild`.
 
 ```sh
 git clone --recurse-submodules <this repo>
-```
-
-Note that `FEX`, `wine` and `research/dxmt` are submodules pointing at forks
-containing the iOS work; upstream clones will not build here.
-
-## License
-
-**GPL-3.0-or-later** — see [`LICENSE`](LICENSE). Derivatives that are
-distributed must remain open source.
-
-### Upstream licenses vs. this project's forks
-
-Those are the licenses of the **upstream projects**: Wine and GnuTLS
-LGPL-2.1-or-later, GMP and Nettle LGPL-3.0-or-later, FEX-Emu and DXMT MIT,
-rpmalloc 0BSD. Their texts are in [`LICENSES/`](LICENSES), and upstream code
-remains available under them **from upstream**.
-
-**The forks used here are not licensed identically to their upstreams.** Each
-carries its own `LICENSE-MADEIRA.md` saying exactly what applies:
-
-| Fork | Terms |
-|---|---|
-| [`wine`](https://github.com/willfaust/wine) | relicensed to **GPL-3.0-or-later** under LGPL-2.1 §3 |
-| [`FEX`](https://github.com/willfaust/FEX), [`dxmt`](https://github.com/willfaust/dxmt) | upstream MIT preserved; modifications **GPL-3.0-or-later** |
-| [`rpmalloc`](https://github.com/willfaust/rpmalloc) | upstream 0BSD preserved; Will Faust's modifications **GPL-3.0-or-later** |
-
-This is not retroactive: those forks were public beforehand, so anything
-already obtained under a permissive license stays available under it.
-
-[`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md) has the per-component
-breakdown. Note in particular that the Microsoft Visual C++ runtime DLLs are
-not distributed here and must be supplied yourself — see
-[`tools/fetch-vcruntime.md`](tools/fetch-vcruntime.md).
-
-## A note on upstream contributions
-
-The forks here contain substantial AI-assisted work. FEX-Emu's contribution
-policy states that AI must not be used to generate code for contributions to
-that project, so **do not submit AI-generated changes from this fork upstream**.
-The MIT license permits the fork itself; the policy governs contributions back.
-Check each upstream's contribution policy before proposing changes to it.
