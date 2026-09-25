@@ -24,7 +24,7 @@ breaking changes.
   expire after 7 days, so the app must be rebuilt and reinstalled weekly. The
   app's container survives reinstall, so prefixes and saves are preserved.
 
-Because JIT requires debugger attach, this app cannot be distributed through the
+ JIT requires debugger attach, this app cannot be distributed through the
 App Store. It is installed by sideloading.
 
 ## Building
